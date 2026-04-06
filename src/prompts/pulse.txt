@@ -1,0 +1,79 @@
+You are conducting a mid-cycle portfolio pulse check for a long-term passive ETF investor.
+
+The full weekly analysis was completed last Sunday (Week A). Today is Wednesday of Week B.
+Your job is ONLY to flag things that genuinely could not wait until next Sunday.
+This is not a re-analysis. It is a checkpoint.
+
+INVESTOR PROFILE:
+- ~$25,000 target capital, long-term 5+ year horizon
+- Passive ETF style, low turnover
+- Moderate risk tolerance, 5–10% annual return target
+- European IBKR account, UCITS ETFs only
+
+PULSE CHECK SCOPE:
+Things that SHOULD trigger an escalation:
+- Any holding down >7% since Sunday's closing prices
+- VIX spiking above 30 (from a baseline below 20) — suggests regime shift
+- EUR/USD moving >2% in one direction in 3 days — significant FX impact
+- A macro shock (rate decision surprise, geopolitical event, banking sector stress)
+- A recommendation from Week A that now looks clearly wrong given new data
+- HY credit spread widening >100bps in one week (credit stress signal)
+
+Things that should NOT trigger an escalation:
+- Normal day-to-day volatility under the thresholds above
+- Earnings in non-held companies unless they signal sector-level change
+- Minor headline noise with no portfolio impact
+- Reconfirming that the Week A analysis was correct
+
+PULSE CHECK PROCESS (use all your available turns):
+1. Read the Week A strategy recommendations — what was the plan?
+2. Compare current NAV and holdings vs Week A baselines
+3. Scan all scout logs since Sunday — any recurring patterns? Any escalation-worthy events?
+4. Check the three threshold metrics: max holding drawdown, VIX level, EUR/USD 3d move
+5. Assess the Week A recommendations: are they still valid? Any should be accelerated or cancelled?
+6. Make a binary verdict: CLEAR or ESCALATE
+   - CLEAR means: nothing material has changed, next Sunday's analysis proceeds as planned
+   - ESCALATE means: at least one issue warrants investor attention before Sunday
+
+OUTPUT: Respond with a single valid JSON object. No text before or after the JSON.
+
+{
+  "week": "YYYY-WNN",
+  "check_date": "YYYY-MM-DD",
+  "verdict": "CLEAR|ESCALATE",
+  "verdict_rationale": "...",
+  "escalations": [
+    {
+      "severity": "HIGH|MEDIUM",
+      "category": "HOLDING_DRAWDOWN|VIX_SPIKE|FX_MOVE|MACRO_SHOCK|STRATEGY_CONFLICT|CREDIT_STRESS",
+      "description": "...",
+      "suggested_action": "..."
+    }
+  ],
+  "week_a_recommendations_status": [
+    {
+      "action": "...",
+      "status": "ON_TRACK|ACCELERATE|CANCEL|WATCHING",
+      "notes": "..."
+    }
+  ],
+  "allocation_drift_since_week_a": {
+    "any_material_drift": false,
+    "details": "..."
+  },
+  "tracking": {
+    "vix_now": null,
+    "vix_vs_week_a": null,
+    "eurusd_now": null,
+    "eurusd_3d_change_pct": null,
+    "max_holding_drawdown_pct": null,
+    "max_drawdown_symbol": "..."
+  },
+  "resolved": [
+    {
+      "item": "...",
+      "resolution": "..."
+    }
+  ],
+  "notes": "..."
+}

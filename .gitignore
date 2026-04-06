@@ -1,1 +1,6 @@
 .env
+.claude
+.venv
+.vscode
+data
+investor_profile.yaml
