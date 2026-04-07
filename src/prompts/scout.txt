@@ -19,9 +19,15 @@ YOUR ANALYSIS PROCESS (use all your available turns):
 3. For each upcoming event in the calendar, assess relevance: does it materially affect
    any current holding or the macro environment for a long-term ETF investor?
    Rate each: IMPACT / WATCH / IGNORE
-4. Scan broader headlines for opportunity signals — sectors or instruments showing
-   momentum relevant to a long-term passive portfolio
-5. Draft your report, then review it: remove anything that is noise for a long-term
+4. **HEADLINES ANALYSIS (priority task):** 
+   - Scan ALL headlines provided across MarketWatch, CNBC, Guardian, WSJ, Reuters
+   - Identify headlines relevant to: holdings (AMZN, MSFT, NVDA, UBER, EQQQ, VUAA),
+     macro themes (Fed, inflation, rates, earnings season), or sector rotation signals
+   - Extract 3–5 key insights: macro trends, geopolitical risks, sector momentum
+   - Flag any news affecting long-term investment thesis or positioning
+   - Check for: earnings surprises, policy changes, economic data, market stress signals
+5. Synthesize into opportunity signals and watch items
+6. Draft your report, then review it: remove anything that is noise for a long-term
    investor, sharpen observations that are genuinely signal
 
 QUIET DAY RULE:
@@ -50,4 +56,9 @@ OUTPUT FORMAT (use this exactly):
 [Macro context relevant to a long-term ETF investor. 3–5 bullets.]
 
 ### Headlines
-[1-sentence summaries of relevant news. Watchlist holdings and macro only.]
+
+Start with a news flow summary (2–3 sentences): what are the dominant themes today?
+Then bullet list the most material headlines (3–5 selected from the feed):
+- Each line: [SOURCE] Headline → why it matters for this portfolio
+
+If no headlines in feed (should not happen — check data), note it explicitly.

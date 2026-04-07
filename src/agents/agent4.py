@@ -113,6 +113,16 @@ def build_context(snapshot: dict, agent1: dict, agent2: dict,
     if "No historical" not in chronicle_text:
         parts.append(f"\n{chronicle_text}")
 
+    # Performance history — NAV + risk score trend
+    perf_text = chronicle.summarise_performance_for_context(weeks=12)
+    if perf_text:
+        parts.append(f"\n{perf_text}")
+
+    # Recommendation history — track open/repeating actions
+    rec_text = chronicle.summarise_recommendations_for_context(weeks=3)
+    if rec_text:
+        parts.append(f"\n{rec_text}")
+
     return "\n".join(parts)
 
 
@@ -134,7 +144,7 @@ def run() -> None:
         sys.exit(1)
 
     context = build_context(snapshot, agent1, agent2, agent3, last_week, investor_profile)
-    log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get("AGENTFOLIO_MAX_TURNS", MAX_TURNS))})...")
+    log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get('AGENTFOLIO_MAX_TURNS', MAX_TURNS))})...")
 
     raw = run_claude(SYSTEM_PROMPT, context, MAX_TURNS)
     result = extract_json(raw)
@@ -145,6 +155,23 @@ def run() -> None:
     if chronicle_entry:
         chronicle.append_entry(chronicle_entry)
         log(AGENT, f"Appended chronicle entry for {chronicle_entry.get('week', '?')}")
+
+    # Record weekly performance snapshot for longitudinal tracking
+    nav_data = snapshot.get("nav", {})
+    chronicle.append_performance_entry({
+        "week":       current_week(),
+        "nav":        nav_data.get("total", 0),
+        "invested":   nav_data.get("stock", 0),
+        "cash":       nav_data.get("cash", 0),
+        "risk_score": agent2.get("risk_score") if agent2 else None,
+        "holdings":   {
+            sym: round(h.get("unrealized_pnl_pct", 0), 2)
+            for sym, h in snapshot.get("holdings", {}).items()
+        },
+    })
+
+    # Persist this week's recommendations for future context
+    chronicle.append_recommendations(current_week(), result.get("recommendations", []))
 
     out_path = DATA / "weekly" / "agent4_strategy.json"
     write_json(out_path, result)

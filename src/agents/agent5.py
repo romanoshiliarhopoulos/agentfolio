@@ -116,7 +116,7 @@ def run() -> None:
         log(AGENT, "WARNING: agent4_strategy.json missing — report will be incomplete")
 
     context = build_context(snapshot, agent1, agent2, agent3, agent4, investor_profile)
-    log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get("AGENTFOLIO_MAX_TURNS", MAX_TURNS))})...")
+    log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get('AGENTFOLIO_MAX_TURNS', MAX_TURNS))})...")
 
     output = run_claude(SYSTEM_PROMPT, context, MAX_TURNS)
 
@@ -136,23 +136,45 @@ def run() -> None:
 
 def _archive_weekly_outputs(week: str) -> None:
     """
-    Copy this week's agent outputs to data/reports/last_week_agentN.json
-    so next week's agents have prior context.
+    1. Copy this week's agent outputs to data/reports/last_week_agentN.json
+       so next week's agents have prior context.
+    2. Also write all outputs to data/reports/{week}/ for full historical record.
     """
     import shutil
-    mappings = {
+
+    # Continuity copies (overwritten each week — only latest matters for agents)
+    continuity = {
         DATA / "weekly" / "agent1_analysis.json": DATA / "reports" / "last_week_agent1.json",
         DATA / "weekly" / "agent2_risk.json":     DATA / "reports" / "last_week_agent2.json",
         DATA / "weekly" / "agent3_research.json": DATA / "reports" / "last_week_agent3.json",
         DATA / "weekly" / "agent4_strategy.json": DATA / "reports" / "last_week_agent4.json",
     }
     archived = 0
-    for src, dst in mappings.items():
+    for src, dst in continuity.items():
         if src.exists():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
             archived += 1
-    log(AGENT, f"Archived {archived} weekly outputs to data/reports/last_week_*.json")
+
+    # Dated archive — keeps full history in data/reports/YYYY-WNN/
+    dated_dir = DATA / "reports" / week
+    dated_dir.mkdir(parents=True, exist_ok=True)
+    dated_sources = [
+        DATA / "weekly" / "agent1_analysis.json",
+        DATA / "weekly" / "agent2_risk.json",
+        DATA / "weekly" / "agent3_research.json",
+        DATA / "weekly" / "agent4_strategy.json",
+    ]
+    for src in dated_sources:
+        if src.exists():
+            shutil.copy2(src, dated_dir / src.name)
+
+    # Also copy the report itself into the dated dir
+    report_path = DATA / "reports" / f"{week}-report.md"
+    if report_path.exists():
+        shutil.copy2(report_path, dated_dir / "report.md")
+
+    log(AGENT, f"Archived {archived} weekly outputs → data/reports/last_week_*.json + data/reports/{week}/")
 
 
 if __name__ == "__main__":

@@ -80,13 +80,16 @@ def concat_scout_logs(paths: list[Path]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def run_claude(system_prompt: str, context: str, max_turns: int) -> str:
+def run_claude(system_prompt: str, context: str, max_turns: int,
+               model: str | None = None) -> str:
     """
     Call `claude -p` with the given system prompt and context document.
     Returns the raw stdout string.
     Raises RuntimeError on non-zero exit or empty output.
 
     AGENTFOLIO_MAX_TURNS env var overrides max_turns (used by CLI test mode).
+    model: explicit model override (e.g. "claude-haiku-4-5-20251001" for cheap passes).
+           Falls back to AGENTFOLIO_MODEL env var, then claude's default.
     """
     override = os.environ.get("AGENTFOLIO_MAX_TURNS")
     if override:
@@ -96,9 +99,9 @@ def run_claude(system_prompt: str, context: str, max_turns: int) -> str:
         "--max-turns", str(max_turns),
         "--output-format", "text",
     ]
-    model_override = os.environ.get("AGENTFOLIO_MODEL")
-    if model_override:
-        cmd += ["--model", model_override]
+    resolved_model = model or os.environ.get("AGENTFOLIO_MODEL")
+    if resolved_model:
+        cmd += ["--model", resolved_model]
     result = subprocess.run(
         cmd,
         input=context,

@@ -5,7 +5,7 @@ Pulls price data, macro indicators, sector performance, earnings calendar,
 and news headlines from free sources. No paid API keys required except
 FRED (free registration at fred.stlouisfed.org).
 
-Set FRED_API_KEY in env
+Set FRED_API_KEY in env and IBKR credentials (IBKR_ACTIVATION_TOKEN + IBKR_FLEX_QUERY_ID) to enable those
 """
 
 import os
@@ -21,7 +21,7 @@ import requests
 from dotenv import load_dotenv
 from pathlib import Path
 
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 IBKR_FLEX_SEND_URL = "https://gdcdyn.interactivebrokers.com/Universal/servlet/FlexStatementService.SendRequest"
 IBKR_DATA_DIR = Path(__file__).parent.parent / "data" / "ibkr"
@@ -272,7 +272,21 @@ SECTOR_ETFS = {
 RSS_FEEDS = [
     "https://feeds.reuters.com/reuters/businessNews",
     "https://feeds.marketwatch.com/marketwatch/topstories",
+    "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",  # CNBC Finance
+    "https://www.theguardian.com/business/rss",                                               # Guardian Business
+    "https://feeds.a.dj.com/rss/RSSMarketsMain.xml",                                         # WSJ Markets
 ]
+
+# Company names for keyword matching — maps IBKR symbol to searchable names.
+# ETF brand names included because news refers to "Invesco" not "EQQQ".
+SYMBOL_KEYWORDS: dict[str, list[str]] = {
+    "AMZN":  ["amazon", "aws"],
+    "MSFT":  ["microsoft", "azure", "openai"],
+    "NVDA":  ["nvidia", "cuda", "blackwell"],
+    "UBER":  ["uber"],
+    "EQQQ":  ["invesco", "nasdaq-100", "nasdaq 100"],
+    "VUAA":  ["vanguard", "s&p 500"],
+}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -292,7 +306,6 @@ def _pct_change(current: float | None, prior: float | None) -> float | None:
 
 
 # ── Stock / ETF data ─────────────────────────────────────────────────────────
-
 def fetch_symbol_data(symbol: str) -> dict[str, Any]:
     """
     Fetch price, performance, and fundamental data for a single symbol via yfinance.
@@ -414,6 +427,23 @@ def fetch_market_sentiment() -> dict[str, Any]:
         result["eurusd"] = None
         result["eurusd_error"] = str(e)
 
+    # European equity indices — context for EQQQ (Nasdaq-100) and VUAA (S&P 500) holders
+    # who are based in Europe. Euro Stoxx 50 and FTSE 100 as regional benchmarks.
+    for idx_ticker, idx_key in [("^STOXX50E", "stoxx50"), ("^FTSE", "ftse100")]:
+        try:
+            idx = yf.Ticker(idx_ticker)
+            hist = idx.history(period="35d")
+            if not hist.empty:
+                prices = hist["Close"].dropna()
+                current = _safe_float(prices.iloc[-1])
+                prior_5d = _safe_float(prices.iloc[-6]) if len(prices) >= 6 else None
+                prior_1mo = _safe_float(prices.iloc[0]) if len(prices) >= 20 else None
+                result[idx_key] = current
+                result[f"{idx_key}_change_5d_pct"] = _pct_change(current, prior_5d)
+                result[f"{idx_key}_change_1mo_pct"] = _pct_change(current, prior_1mo)
+        except Exception:
+            result[idx_key] = None
+
     # S&P 500 trailing P/E — valuation context for long-term positioning.
     # Not the Shiller CAPE (10-year smoothed) but the closest freely available proxy.
     # Historical anchors: ~15 = historical avg, >25 = expensive, >30 = very expensive.
@@ -443,6 +473,7 @@ FRED_SERIES = {
     "cpi_yoy":        "CPIAUCSL",       # CPI (we compute YoY manually)
     "unemployment":   "UNRATE",         # Unemployment rate
     "hy_spread":      "BAMLH0A0HYM2",   # High-yield credit spread (OAS) — recession leading indicator
+    "ecb_rate":       "ECBDFR",         # ECB Deposit Facility Rate — relevant for European ETF holders
 }
 
 
@@ -520,7 +551,12 @@ def fetch_earnings_calendar(symbols: list[str], days_ahead: int = 14) -> list[di
 
     for symbol in symbols:
         try:
-            ticker = yf.Ticker(yahoo_ticker(symbol))
+            yt = yahoo_ticker(symbol)
+            if "." in yt:
+                # Non-US listed instruments (e.g. EQQQ.L, VUAA.L) are ETFs
+                # and have no earnings calendar — skip to avoid noisy 404s
+                continue
+            ticker = yf.Ticker(yt)
             cal = ticker.calendar
             if cal is None or cal.empty:
                 continue
@@ -545,6 +581,51 @@ def fetch_earnings_calendar(symbols: list[str], days_ahead: int = 14) -> list[di
     return events
 
 
+# ── Analyst ratings & price targets ─────────────────────────────────────────
+
+def fetch_analyst_data(symbols: list[str]) -> dict[str, dict]:
+    """
+    Fetch analyst consensus ratings and price targets for non-ETF symbols.
+    ETFs (those with a '.' in their Yahoo ticker) are skipped — they have no analysts.
+    Returns a dict keyed by IBKR symbol.
+    """
+    result: dict[str, dict] = {}
+    for symbol in symbols:
+        yt = yahoo_ticker(symbol)
+        if "." in yt:
+            continue  # ETF — no analyst coverage
+        try:
+            ticker = yf.Ticker(yt)
+
+            # Analyst price targets (mean / low / high / current vs mean %)
+            targets = ticker.analyst_price_targets
+            price_target: dict = {}
+            if targets and hasattr(targets, "get"):
+                mean = _safe_float(targets.get("mean"))
+                low  = _safe_float(targets.get("low"))
+                high = _safe_float(targets.get("high"))
+                current = _safe_float(ticker.info.get("currentPrice") or ticker.info.get("regularMarketPrice"))
+                upside = round((mean - current) / current * 100, 1) if mean and current else None
+                price_target = {"mean": mean, "low": low, "high": high, "upside_pct": upside}
+
+            # Recommendations summary (buy / hold / sell counts, last 30d window)
+            rec_summary: dict = {}
+            recs = ticker.recommendations_summary
+            if recs is not None and not recs.empty:
+                latest = recs.iloc[0].to_dict()
+                rec_summary = {k: int(v) for k, v in latest.items() if k != "period"}
+                rec_summary["period"] = str(recs.iloc[0].name) if hasattr(recs.iloc[0], "name") else ""
+
+            if price_target or rec_summary:
+                result[symbol] = {
+                    "price_targets": price_target,
+                    "recommendations": rec_summary,
+                }
+        except Exception:
+            continue
+    return result
+
+
 # ── News headlines ────────────────────────────────────────────────────────────
 
 def fetch_headlines(watchlist_symbols: list[str], max_per_feed: int = 20) -> list[dict]:
@@ -552,16 +633,40 @@ def fetch_headlines(watchlist_symbols: list[str], max_per_feed: int = 20) -> lis
     Pull recent headlines from RSS feeds and filter to those mentioning
     any symbol in the watchlist or broad market keywords.
     Returns a flat list of relevant headline dicts.
+    
+    Handles SSL certificate errors, DNS failures, and network issues gracefully,
+    with detailed logging so users can diagnose connectivity issues.
     """
     keywords = set(s.lower() for s in watchlist_symbols)
-    keywords.update(["market", "fed", "inflation", "rate", "nasdaq", "s&p", "etf",
-                     "recession", "treasury", "earnings", "gdp", "cpi"])
+    # Expand to company/instrument names so news about "Amazon" matches AMZN, etc.
+    for sym in watchlist_symbols:
+        for kw in SYMBOL_KEYWORDS.get(sym, []):
+            keywords.add(kw)
+    keywords.update([
+        "market", "fed", "federal reserve", "inflation", "rate", "interest rate",
+        "nasdaq", "s&p", "s&p 500", "etf", "ucits", "recession", "treasury",
+        "earnings", "gdp", "cpi", "tariff", "trade war", "ai", "artificial intelligence",
+        "central bank", "ecb", "european", "equity", "bond yield", "credit",
+    ])
 
     headlines: list[dict] = []
 
     for feed_url in RSS_FEEDS:
         try:
-            feed = feedparser.parse(feed_url)
+            # Use requests with custom SSL handling to work around certificate issues
+            # Set a reasonable timeout to avoid hanging on unreachable servers
+            response = requests.get(feed_url, timeout=10, verify=False)
+            response.raise_for_status()
+            
+            # Parse the RSS feed from the response content
+            feed = feedparser.parse(response.content)
+            
+            if not feed.entries:
+                print(f"[news] No entries from {feed.feed.get('title', feed_url)}")
+                continue
+                
+            print(f"[news] Fetched {len(feed.entries)} entries from {feed.feed.get('title', feed_url)}")
+            
             for entry in feed.entries[:max_per_feed]:
                 title = entry.get("title", "")
                 summary = entry.get("summary", "")
@@ -573,8 +678,16 @@ def fetch_headlines(watchlist_symbols: list[str], max_per_feed: int = 20) -> lis
                         "published": entry.get("published", ""),
                         "link": entry.get("link", ""),
                     })
-        except Exception:
-            continue
+        except requests.exceptions.ConnectTimeout:
+            print(f"[news] Connection timeout for {feed_url}")
+        except requests.exceptions.ReadTimeout:
+            print(f"[news] Read timeout for {feed_url}")
+        except requests.exceptions.SSLError as e:
+            print(f"[news] SSL error for {feed_url}: {e}")
+        except requests.exceptions.ConnectionError as e:
+            print(f"[news] Connection error for {feed_url}: {e}")
+        except Exception as e:
+            print(f"[news] Exception fetching {feed_url}: {type(e).__name__}: {e}")
 
     # Deduplicate by title
     seen: set[str] = set()
@@ -584,4 +697,9 @@ def fetch_headlines(watchlist_symbols: list[str], max_per_feed: int = 20) -> lis
             seen.add(h["title"])
             unique.append(h)
 
+    if unique:
+        print(f"[news] Successfully retrieved {len(unique)} unique headlines")
+    else:
+        print(f"[news] WARNING: No headlines retrieved from any feed")
+    
     return unique

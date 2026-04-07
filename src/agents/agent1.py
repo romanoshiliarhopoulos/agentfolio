@@ -1,4 +1,3 @@
-import os
 """
 Agent 1 — Portfolio Analyzer
 
@@ -15,6 +14,7 @@ Writes:
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,6 +24,7 @@ from agents.base import (
     run_claude, extract_json, write_json,
     scout_logs_this_week, concat_scout_logs, current_week, log, load_prompt,
 )
+import chronicle
 
 AGENT = "agent1"
 MAX_TURNS = 40
@@ -113,9 +114,14 @@ def build_context(snapshot: dict, weekly_digest: str, last_week: dict) -> str:
         parts.append("\n## Last Week's Portfolio Analysis (for comparison)")
         parts.append(json.dumps(last_week, indent=2))
 
-    chronicle = snapshot.get("market_chronicle", "")
-    if chronicle and "No historical" not in chronicle:
-        parts.append(f"\n{chronicle}")
+    chron = snapshot.get("market_chronicle", "")
+    if chron and "No historical" not in chron:
+        parts.append(f"\n{chron}")
+
+    # Performance history — NAV trend for spotting multi-week drift
+    perf_text = chronicle.summarise_performance_for_context(weeks=12)
+    if perf_text:
+        parts.append(f"\n{perf_text}")
 
     return "\n".join(parts)
 
@@ -136,7 +142,7 @@ def run() -> None:
     last_week = load_json(DATA / "reports" / "last_week_agent1.json")
 
     context = build_context(snapshot, weekly_digest, last_week)
-    log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get("AGENTFOLIO_MAX_TURNS", MAX_TURNS))})...")
+    log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get('AGENTFOLIO_MAX_TURNS', MAX_TURNS))})...")
 
     raw = run_claude(SYSTEM_PROMPT, context, MAX_TURNS)
     result = extract_json(raw)

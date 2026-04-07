@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any
 
 
-CHRONICLE_PATH = Path(__file__).parent.parent / "data" / "chronicle" / "market_chronicle.json"
+CHRONICLE_PATH      = Path(__file__).parent.parent / "data" / "chronicle" / "market_chronicle.json"
+PERFORMANCE_PATH    = Path(__file__).parent.parent / "data" / "chronicle" / "performance_history.json"
+RECOMMENDATIONS_PATH = Path(__file__).parent.parent / "data" / "chronicle" / "recommendations_log.json"
 MAX_ENTRIES = 26  # ~6 months of weekly entries
 
 
@@ -58,6 +60,87 @@ def load_for_context(weeks: int = 12) -> list[dict]:
     """
     entries = load()
     return entries[-weeks:]
+
+
+# ── Performance history ───────────────────────────────────────────────────────
+
+def append_performance_entry(entry: dict) -> None:
+    """
+    Append a weekly performance snapshot. Expected fields:
+      week, nav, cash, invested, risk_score, holdings (symbol→pnl_pct dict)
+    """
+    required = {"week", "nav"}
+    if not required.issubset(entry.keys()):
+        return
+    PERFORMANCE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    entries = json.loads(PERFORMANCE_PATH.read_text()) if PERFORMANCE_PATH.exists() else []
+    entries = [e for e in entries if e.get("week") != entry["week"]]
+    entries.append(entry)
+    entries.sort(key=lambda e: e.get("week", ""))
+    entries = entries[-MAX_ENTRIES:]
+    PERFORMANCE_PATH.write_text(json.dumps(entries, indent=2))
+
+
+def load_performance_history(weeks: int = 12) -> list[dict]:
+    if not PERFORMANCE_PATH.exists():
+        return []
+    return json.loads(PERFORMANCE_PATH.read_text())[-weeks:]
+
+
+def summarise_performance_for_context(weeks: int = 12) -> str:
+    """Compact markdown table of weekly NAV + risk score for agent context."""
+    entries = load_performance_history(weeks)
+    if not entries:
+        return ""
+    lines = ["## Portfolio Performance History (weekly NAV)\n"]
+    lines.append("| Week | NAV | Invested | Cash% | Risk Score |")
+    lines.append("|------|-----|----------|-------|------------|")
+    for e in entries:
+        nav       = e.get("nav", 0)
+        invested  = e.get("invested", 0)
+        cash      = e.get("cash", 0)
+        cash_pct  = round(cash / nav * 100, 1) if nav else 0
+        risk      = e.get("risk_score", "n/a")
+        lines.append(f"| {e['week']} | ${nav:,.0f} | ${invested:,.0f} | {cash_pct}% | {risk} |")
+    return "\n".join(lines)
+
+
+# ── Recommendation log ────────────────────────────────────────────────────────
+
+def append_recommendations(week: str, recommendations: list[dict]) -> None:
+    """Persist this week's agent4 recommendations for multi-week tracking."""
+    if not recommendations:
+        return
+    RECOMMENDATIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log = json.loads(RECOMMENDATIONS_PATH.read_text()) if RECOMMENDATIONS_PATH.exists() else []
+    log = [e for e in log if e.get("week") != week]
+    log.append({"week": week, "recommendations": recommendations})
+    log.sort(key=lambda e: e.get("week", ""))
+    log = log[-MAX_ENTRIES:]
+    RECOMMENDATIONS_PATH.write_text(json.dumps(log, indent=2))
+
+
+def load_recent_recommendations(weeks: int = 3) -> list[dict]:
+    if not RECOMMENDATIONS_PATH.exists():
+        return []
+    return json.loads(RECOMMENDATIONS_PATH.read_text())[-weeks:]
+
+
+def summarise_recommendations_for_context(weeks: int = 3) -> str:
+    """Show last N weeks of recommendations so agent4 can track open actions."""
+    entries = load_recent_recommendations(weeks)
+    if not entries:
+        return ""
+    lines = ["## Recommendation History (last 3 weeks — track open actions)\n"]
+    for e in entries:
+        lines.append(f"**{e['week']}**")
+        for r in e.get("recommendations", []):
+            urgency  = r.get("urgency", "?")
+            action   = r.get("action", "?")
+            horizon  = r.get("time_horizon", "")
+            lines.append(f"  [{urgency}] {action}  ({horizon})")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def summarise_for_context(weeks: int = 12) -> str:

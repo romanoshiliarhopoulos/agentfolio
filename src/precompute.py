@@ -40,6 +40,9 @@ CONTEXT_DIR.mkdir(parents=True, exist_ok=True)
 PORTFOLIO_SNAPSHOT_PATH = CONTEXT_DIR / "portfolio_snapshot.json"
 MARKET_RESEARCH_PATH    = CONTEXT_DIR / "market_research.json"
 
+HISTORY_DIR = REPO_ROOT / "data/context/history"
+NEWS_DIR    = REPO_ROOT / "data/news"
+
 load_dotenv(REPO_ROOT / ".env")
 
 
@@ -92,6 +95,9 @@ def run() -> None:
 
     print("[precompute] Fetching news headlines...")
     headlines = fmd.fetch_headlines(symbols)
+
+    print("[precompute] Fetching analyst data...")
+    analyst_data = fmd.fetch_analyst_data(symbols)
 
     # ── Step 3: Compute derived metrics ──────────────────────────────────────
     allocation   = compute.compute_allocation(holdings, nav_total)
@@ -146,12 +152,29 @@ def run() -> None:
         "sentiment": sentiment,
         "events_calendar": earnings,
         "headlines": headlines,
+        "analyst_data": analyst_data,
         "current_holdings": symbols,
         "market_chronicle": chronicle_summary,
     }
 
     MARKET_RESEARCH_PATH.write_text(json.dumps(research, indent=2, default=str))
     print(f"[precompute] Wrote {MARKET_RESEARCH_PATH}")
+
+    # ── Step 6: Archive dated copies for historical access ────────────────────
+    today_str = datetime.date.today().isoformat()
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    NEWS_DIR.mkdir(parents=True, exist_ok=True)
+
+    dated_snapshot = HISTORY_DIR / f"portfolio_snapshot_{today_str}.json"
+    dated_research = HISTORY_DIR / f"market_research_{today_str}.json"
+    dated_snapshot.write_text(json.dumps(snapshot, indent=2, default=str))
+    dated_research.write_text(json.dumps(research, indent=2, default=str))
+    print(f"[precompute] Archived dated snapshot → {dated_snapshot.name}")
+
+    # Save headlines separately for multi-day news access by agents
+    news_path = NEWS_DIR / f"{today_str}.json"
+    news_path.write_text(json.dumps(headlines, indent=2, default=str))
+    print(f"[precompute] Archived news → {news_path.name}")
 
     print("[precompute] Done.")
     _print_summary(snapshot)

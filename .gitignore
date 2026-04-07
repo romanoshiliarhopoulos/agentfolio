@@ -4,3 +4,7 @@
 .vscode
 data
 investor_profile.yaml
+*pycache*
+.DS_Store
+src/DS_Store
+src/__pycache__*
