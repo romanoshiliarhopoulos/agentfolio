@@ -8,3 +8,4 @@ investor_profile.yaml
 .DS_Store
 src/DS_Store
 src/__pycache__*
+CLAUDE.md
