@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from agents.base import (
     DATA, load_json, load_investor_profile,
     run_claude, write_text,
-    current_week, log, load_prompt,
+    current_week, log, load_prompt, send_report_email,
 )
 
 AGENT = "agent5"
@@ -125,6 +125,14 @@ def run() -> None:
     out_path = DATA / "reports" / f"{week}-report.md"
     write_text(out_path, output)
     log(AGENT, f"Wrote {out_path}")
+
+    # Email the report
+    try:
+        subject = f"Agentfolio Weekly Report — {week}"
+        send_report_email(subject, output)
+        log(AGENT, f"Report emailed to recipient")
+    except Exception as e:
+        log(AGENT, f"WARNING: Email failed — {e}")
 
     # Archive current weekly JSONs as "last week" for next run's continuity
     _archive_weekly_outputs(week)

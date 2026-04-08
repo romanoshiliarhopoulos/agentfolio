@@ -164,3 +164,41 @@ def write_text(path: Path, text: str) -> None:
 def log(agent_name: str, msg: str) -> None:
     ts = datetime.datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] [{agent_name}] {msg}", flush=True)
+
+
+def send_report_email(subject: str, body: str) -> None:
+    """
+    Send the weekly report via Gmail using SMTP.
+    Reads GMAIL_ADDRESS, GMAIL_APP_PASSWORD, GMAIL_RECIPIENT from env/.env.
+    Raises RuntimeError if credentials are missing or send fails.
+    """
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+
+    # Load .env if not already in environment
+    dotenv_path = REPO_ROOT / ".env"
+    env: dict[str, str] = {}
+    if dotenv_path.exists():
+        for line in dotenv_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                env[k.strip()] = v.strip().strip('"')
+
+    sender    = os.environ.get("GMAIL_ADDRESS")    or env.get("GMAIL_ADDRESS", "")
+    password  = os.environ.get("GMAIL_APP_PASSWORD") or env.get("GMAIL_APP_PASSWORD", "")
+    recipient = os.environ.get("GMAIL_RECIPIENT")  or env.get("GMAIL_RECIPIENT", "")
+
+    if not sender or not password or not recipient:
+        raise RuntimeError("Email not sent: GMAIL_ADDRESS, GMAIL_APP_PASSWORD, or GMAIL_RECIPIENT missing from .env")
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = sender
+    msg["To"]      = recipient
+    msg.attach(MIMEText(body, "plain"))
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+        smtp.login(sender, password)
+        smtp.sendmail(sender, recipient, msg.as_string())
