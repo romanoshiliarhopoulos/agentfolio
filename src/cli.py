@@ -29,6 +29,7 @@ from rich.panel import Panel
 from rich.columns import Columns
 from rich.text import Text
 from rich.syntax import Syntax
+from rich.markdown import Markdown
 from rich.prompt import Prompt, Confirm
 from rich.live import Live
 from rich.spinner import Spinner
@@ -1506,9 +1507,10 @@ def reports_final(week):
     mtime = datetime.datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
     console.print()
     console.print(Panel(
-        Syntax(path.read_text(), "markdown", theme="monokai", word_wrap=True),
+        Markdown(path.read_text()),
         title=f"[bold]{path.stem}[/]  [dim]{mtime}[/]",
         border_style="cyan",
+        padding=(1, 2),
     ))
 
 
@@ -1528,19 +1530,22 @@ def reports_agent(agent, raw):
     except json.JSONDecodeError:
         data = {}
 
+    console.print()
     if raw or not data:
         text = json.dumps(data, indent=2) if data else path.read_text()
-        lang = "json"
+        console.print(Panel(
+            Syntax(text, "json", theme="monokai", word_wrap=True),
+            title=f"[bold]{label}[/]  [dim]{mtime}[/]",
+            border_style="cyan",
+            padding=(1, 2),
+        ))
     else:
-        text = _agent_json_to_md(agent, data)
-        lang = "markdown"
-
-    console.print()
-    console.print(Panel(
-        Syntax(text, lang, theme="monokai", word_wrap=True),
-        title=f"[bold]{label}[/]  [dim]{mtime}[/]",
-        border_style="cyan",
-    ))
+        console.print(Panel(
+            Markdown(_agent_json_to_md(agent, data)),
+            title=f"[bold]{label}[/]  [dim]{mtime}[/]",
+            border_style="cyan",
+            padding=(1, 2),
+        ))
 
 
 @reports.command("scout")
@@ -1567,9 +1572,10 @@ def reports_scout(week, active_only):
         label = f"[dim]QUIET[/] {path.stem}" if is_quiet else f"[bold]{path.stem}[/]"
         console.print()
         console.print(Panel(
-            Syntax(text, "markdown", theme="monokai", word_wrap=True),
+            Markdown(text),
             title=label,
             border_style="dim cyan" if is_quiet else "cyan",
+            padding=(1, 2),
         ))
 
 
@@ -1584,9 +1590,10 @@ def reports_all():
         mtime = datetime.datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
         console.print()
         console.print(Panel(
-            Syntax(path.read_text(), "markdown", theme="monokai", word_wrap=True),
+            Markdown(path.read_text()),
             title=f"[bold]Final Report — {path.stem}[/]  [dim]{mtime}[/]",
             border_style="cyan",
+            padding=(1, 2),
         ))
 
     # Weekly agents
@@ -1597,15 +1604,14 @@ def reports_all():
         try:
             data = json.loads(path.read_text())
             text = _agent_json_to_md(key, data)
-            lang = "markdown"
         except json.JSONDecodeError:
             text = path.read_text()
-            lang = "markdown"
         console.print()
         console.print(Panel(
-            Syntax(text, lang, theme="monokai", word_wrap=True),
+            Markdown(text),
             title=f"[bold]{label}[/]  [dim]{mtime}[/]",
             border_style="dim cyan",
+            padding=(1, 2),
         ))
 
     # Scout logs (current week)
@@ -1615,9 +1621,10 @@ def reports_all():
     for path in sorted(scout_dir.glob(f"{week}-*.md")) if scout_dir.exists() else []:
         console.print()
         console.print(Panel(
-            Syntax(path.read_text(), "markdown", theme="monokai", word_wrap=True),
+            Markdown(path.read_text()),
             title=f"[bold]{path.stem}[/]",
             border_style="dim",
+            padding=(1, 2),
         ))
 
 
