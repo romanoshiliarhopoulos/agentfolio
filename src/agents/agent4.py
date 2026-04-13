@@ -42,6 +42,9 @@ def build_context(snapshot: dict, agent1: dict, agent2: dict,
     week = current_week()
     parts.append(f"# Strategy Synthesis Context — {week}\n")
 
+    investor_profile = load_investor_profile()
+    parts.append(f"# Investor profile: \n{investor_profile}")
+
     # Investor profile
     parts.append("## Investor Profile")
     parts.append(investor_profile)

@@ -29,7 +29,7 @@ from agents.base import (
 )
 
 AGENT = "agent5"
-MAX_TURNS = 28
+MAX_TURNS = 15
 
 SYSTEM_PROMPT = load_prompt("agent5")
 
@@ -42,6 +42,9 @@ def build_context(snapshot: dict, agent1: dict, agent2: dict,
     week = current_week()
     today = datetime.date.today().isoformat()
     parts.append(f"# Report Generation Context — {week} ({today})\n")
+
+    investor_profile = load_investor_profile()
+    parts.append(f"# Investor profile: \n{investor_profile}")
 
     # Investor profile (brief)
     parts.append("## Investor Profile")
@@ -126,13 +129,27 @@ def run() -> None:
     write_text(out_path, output)
     log(AGENT, f"Wrote {out_path}")
 
-    # Email the report
-    try:
-        subject = f"Agentfolio Weekly Report — {week}"
-        send_report_email(subject, output)
-        log(AGENT, f"Report emailed to recipient")
-    except Exception as e:
-        log(AGENT, f"WARNING: Email failed — {e}")
+    # Email the report — only if it looks like real content, not an error fragment
+    _looks_like_error = (
+        output.lower().startswith("error:") or
+        "reached max turns" in output.lower() or
+        len(output) < 200
+    )
+    if _looks_like_error:
+        log(AGENT, "WARNING: Output looks incomplete — skipping email")
+    else:
+        try:
+            subject = f"Agentfolio Weekly Report — {week}"
+            agent_reports = {
+                "Agent 1 — Portfolio Analysis": agent1,
+                "Agent 2 — Risk Assessment":    agent2,
+                "Agent 3 — Market Research":    agent3,
+                "Agent 4 — Strategy Recommendations": agent4,
+            }
+            send_report_email(subject, output, agent_reports=agent_reports)
+            log(AGENT, f"Report emailed to recipient")
+        except Exception as e:
+            log(AGENT, f"WARNING: Email failed — {e}")
 
     # Archive current weekly JSONs as "last week" for next run's continuity
     _archive_weekly_outputs(week)

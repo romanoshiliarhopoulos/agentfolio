@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agents.base import (
-    DATA, load_json, load_text, run_claude, extract_json, write_json,
+    DATA, load_investor_profile, load_json, load_text, run_claude, extract_json, write_json,
     current_week, high_signal_scout_logs, concat_scout_logs, log, load_prompt,
 )
 from agents.news_filter import run as run_news_filter
@@ -34,18 +34,91 @@ SYSTEM_PROMPT = load_prompt("agent3")
 
 
 def build_context(research: dict, agent1: dict, agent2: dict,
-                  scout_logs: str, last_week: dict, news_digest: dict) -> str:
+                  scout_logs: str, prior_weeks: list, news_digest: dict) -> str:
     parts = []
     week = current_week()
     parts.append(f"# Market Research Context — {week}\n")
 
-    # Sector performance
-    parts.append("## Sector ETF Performance")
+    investor_profile = load_investor_profile()
+    parts.append(f"# Investor profile: \n{investor_profile}")
+
+    # Market Chronicle — long-term macro regime memory (highest priority context)
+    chronicle_text = research.get("market_chronicle", "")
+    if chronicle_text:
+        parts.append("## Market Chronicle (last 12 weeks — macro regime history)")
+        parts.append(chronicle_text)
+
+    # Macro indicators — expanded set including activity and sentiment
+    macro = research.get("macro", {})
+    if macro:
+        parts.append("## Macro Indicators")
+        def _fmt(v, fmt=".2f", suffix=""):
+            return f"{v:{fmt}}{suffix}" if v is not None else "n/a"
+        parts.append(
+            f"  Yields: 10y={_fmt(macro.get('t10y'))}%  2y={_fmt(macro.get('t2y'))}%  "
+            f"spread={_fmt(macro.get('yield_curve_spread'))}%  "
+            f"fed_funds={_fmt(macro.get('fed_funds'))}%"
+        )
+        parts.append(
+            f"  Inflation: CPI YoY={_fmt(macro.get('cpi_yoy'))}%  "
+            f"PCE YoY={_fmt(macro.get('pce_yoy'))}%"
+        )
+        parts.append(
+            f"  Inflation: CPI YoY={_fmt(macro.get('cpi_yoy'))}%  "
+            f"Core CPI YoY={_fmt(macro.get('core_cpi'))}%  "
+            f"PCE YoY={_fmt(macro.get('pce_yoy'))}%"
+        )
+        parts.append(
+            f"  Activity: Industrial Prod={_fmt(macro.get('industrial_prod'), '.1f')}  "
+            f"Retail Sales MoM={_fmt(macro.get('retail_sales_mom'))}%  "
+            f"Unemployment={_fmt(macro.get('unemployment'))}%"
+        )
+        cli = macro.get("leading_indicator")
+        cli_regime = macro.get("leading_indicator_regime", "")
+        parts.append(
+            f"  OECD Leading Indicator={_fmt(cli, '.2f')} ({cli_regime})  "
+            f"Real GDP={_fmt(macro.get('real_gdp_growth'))}%  "
+            f"Housing Starts={_fmt(macro.get('housing_starts'), '.0f', 'k')}"
+        )
+        ecb = macro.get("ecb_rate")
+        consumer = macro.get("consumer_sent")
+        if ecb is not None or consumer is not None:
+            parts.append(
+                f"  ECB rate={_fmt(ecb)}%  "
+                f"Consumer Sentiment={_fmt(consumer, '.1f')}"
+            )
+        hy = macro.get("hy_spread")
+        if hy is not None:
+            parts.append(f"  HY Credit Spread={_fmt(hy)}% OAS  (>6% = stress, >8% = crisis)")
+
+    # Fear & Greed — market psychology overlay
+    fg = research.get("fear_greed", {})
+    if fg and not fg.get("error"):
+        score = fg.get("score")
+        label = fg.get("label", "")
+        s1w   = fg.get("score_1w_ago")
+        l1w   = fg.get("label_1w_ago", "")
+        s1mo  = fg.get("score_1mo_ago")
+        l1mo  = fg.get("label_1mo_ago", "")
+        score_str = f"{score:.0f}" if score is not None else "n/a"
+        s1w_str   = f"{s1w:.0f} ({l1w})" if s1w is not None else "n/a"
+        s1mo_str  = f"{s1mo:.0f} ({l1mo})" if s1mo is not None else "n/a"
+        parts.append(
+            f"\n## CNN Fear & Greed Index\n"
+            f"  Now: {score_str} — {label}  |  1w ago: {s1w_str}  |  1mo ago: {s1mo_str}\n"
+            f"  (0=Extreme Fear → 100=Extreme Greed; extreme readings are contrarian signals)"
+        )
+
+    # Sector performance — multi-timeframe for structural vs noise distinction
+    parts.append("## Sector ETF Performance (multi-timeframe)")
     for sym, d in research.get("sector_etfs", {}).items():
-        chg = d.get("change_1d_pct")
-        chg_5d = d.get("change_5d_pct")
-        if chg is not None:
-            parts.append(f"- {sym}: 1d={chg:+.1f}%  5d={chg_5d:+.1f}% (if available)")
+        chg1d  = d.get("change_1d_pct")
+        chg5d  = d.get("change_5d_pct")
+        chg1mo = d.get("change_1mo_pct")
+        chg3mo = d.get("change_3mo_pct")
+        if chg1d is not None:
+            parts.append(f"- {sym}: 1d={chg1d:+.1f}%  5d={chg5d:+.1f}%  "
+                         f"1mo={chg1mo:+.1f}%  3mo={chg3mo:+.1f}%")
 
     # News digest (Haiku-filtered) — preferred over raw headlines
     if news_digest and news_digest.get("top_headlines"):
@@ -133,19 +206,40 @@ def build_context(research: dict, agent1: dict, agent2: dict,
     parts.append("\n## High-Signal Scout Logs (this week)")
     parts.append(scout_logs)
 
-    # Prior candidates
-    if last_week:
-        parts.append("\n## Last Week's Research Output (for candidate tracking)")
-        prior_candidates = last_week.get("opportunity_candidates", [])
-        if prior_candidates:
-            parts.append("  Prior opportunity candidates:")
-            for c in prior_candidates:
-                parts.append(f"  - {c.get('theme')} ({c.get('ucits_instrument')}): "
+    # UCITS candidate ETF performance — grounds conviction in actual price action
+    ucits_data = research.get("ucits_candidates", {})
+    if ucits_data:
+        parts.append("\n## UCITS Candidate ETF Performance")
+        parts.append("  (5d / 1mo / 3mo returns, RSI, DMA position)")
+        for sym, d in ucits_data.items():
+            if d.get("error"):
+                continue
+            chg5d  = d.get("change_5d_pct")
+            chg1mo = d.get("change_1mo_pct")
+            chg3mo = d.get("change_3mo_pct")
+            rsi    = d.get("rsi_14")
+            above50  = "↑50d" if d.get("above_50dma") else "↓50d"
+            above200 = "↑200d" if d.get("above_200dma") else "↓200d"
+            c5  = f"{chg5d:+.1f}%" if chg5d is not None else "n/a"
+            c1m = f"{chg1mo:+.1f}%" if chg1mo is not None else "n/a"
+            c3m = f"{chg3mo:+.1f}%" if chg3mo is not None else "n/a"
+            parts.append(f"  {sym}: 5d={c5}  1mo={c1m}  3mo={c3m}  RSI={rsi}  {above50} {above200}")
+
+    # Prior weeks candidate history — for trajectory tracking (up to 4 weeks back)
+    if prior_weeks:
+        parts.append("\n## Prior Weeks Research — Candidate Trajectory")
+        for pw in prior_weeks:
+            pw_week = pw.get("week", "?")
+            pw_regime = pw.get("macro_assessment", {}).get("regime", "?")
+            pw_candidates = pw.get("opportunity_candidates", [])
+            parts.append(f"\n  {pw_week} [{pw_regime}]:")
+            for c in pw_candidates:
+                parts.append(f"    - {c.get('theme')} ({c.get('ucits_instrument')}): "
                              f"conviction={c.get('conviction')}  fit={c.get('fit_for_portfolio')}")
-        prior_macro = last_week.get("macro_assessment", {})
-        if prior_macro:
-            parts.append(f"  Prior macro regime: {prior_macro.get('regime')} — "
-                         f"{prior_macro.get('regime_rationale', '')}")
+            shifts = pw.get("structural_shifts", [])
+            if shifts:
+                for s in shifts:
+                    parts.append(f"    ► STRUCTURAL: {s}")
 
     return "\n".join(parts)
 
@@ -153,20 +247,37 @@ def build_context(research: dict, agent1: dict, agent2: dict,
 def run() -> None:
     log(AGENT, "Starting market research")
 
-    research  = load_json(DATA / "context" / "market_research.json")
-    agent1    = load_json(DATA / "weekly" / "agent1_analysis.json")
-    agent2    = load_json(DATA / "weekly" / "agent2_risk.json")
-    last_week = load_json(DATA / "reports" / "last_week_agent3.json")
+    research = load_json(DATA / "context" / "market_research.json")
+    agent1   = load_json(DATA / "weekly" / "agent1_analysis.json")
+    agent2   = load_json(DATA / "weekly" / "agent2_risk.json")
 
     if not research:
         log(AGENT, "WARNING: market_research.json missing — research context will be thin")
+
+    # Load up to 4 prior weeks of agent3 outputs for candidate trajectory tracking.
+    # Prefers dated archive dirs (data/reports/YYYY-WNN/) for full history;
+    # falls back to last_week_agent3.json if no archives exist yet.
+    prior_weeks: list[dict] = []
+    dated_dirs = sorted((DATA / "reports").glob("20??-W??"))[-4:]
+    for wk_dir in dated_dirs:
+        wk_json = wk_dir / "agent3_research.json"
+        if wk_json.exists():
+            pw = load_json(wk_json)
+            if pw:
+                prior_weeks.append(pw)
+    if not prior_weeks:
+        lw = load_json(DATA / "reports" / "last_week_agent3.json")
+        if lw:
+            prior_weeks = [lw]
+
+    log(AGENT, f"Loaded {len(prior_weeks)} prior week(s) for candidate trajectory")
 
     scout_logs = concat_scout_logs(high_signal_scout_logs())
 
     # Run Haiku news filter — scores and clusters multi-day headlines cheaply
     news_digest = run_news_filter()
 
-    context = build_context(research, agent1, agent2, scout_logs, last_week, news_digest)
+    context = build_context(research, agent1, agent2, scout_logs, prior_weeks, news_digest)
     log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get('AGENTFOLIO_MAX_TURNS', MAX_TURNS))})...")
 
     raw = run_claude(SYSTEM_PROMPT, context, MAX_TURNS)

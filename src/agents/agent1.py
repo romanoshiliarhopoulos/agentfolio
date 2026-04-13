@@ -37,6 +37,10 @@ def build_context(snapshot: dict, weekly_digest: str, last_week: dict) -> str:
     week = current_week()
     parts.append(f"# Portfolio Analysis Context — {week}\n")
 
+    investor_profile = load_investor_profile()
+    parts.append(f"# Investor profile: \n{investor_profile}")
+
+
     # Full portfolio snapshot
     parts.append("## Portfolio Snapshot")
     nav = snapshot.get("nav", {})
@@ -152,6 +156,9 @@ def run() -> None:
     write_json(out_path, result)
     log(AGENT, f"Wrote {out_path}")
 
+def test_investor():
+    investor_profile = load_investor_profile()
+    print(f" Investor profile --: {investor_profile}")
 
 if __name__ == "__main__":
-    run()
+    test_investor()

@@ -20,7 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agents.base import (
-    DATA, load_json, run_claude, extract_json, write_json,
+    DATA, load_investor_profile, load_json, run_claude, extract_json, write_json,
     current_week, log, load_prompt,
 )
 
@@ -34,6 +34,9 @@ def build_context(snapshot: dict, agent1: dict, last_week: dict) -> str:
     parts = []
     week = current_week()
     parts.append(f"# Risk Assessment Context — {week}\n")
+
+    investor_profile = load_investor_profile()
+    parts.append(f"# Investor profile: \n{investor_profile}")
 
     nav = snapshot.get("nav", {})
     parts.append(f"## Portfolio NAV\n"

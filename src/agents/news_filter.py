@@ -28,7 +28,7 @@ MAX_TURNS = 1  # Single-pass scoring — no tool use needed
 NEWS_DIR = DATA / "news"
 DIGEST_PATH = DATA / "context" / "news_digest.json"
 
-SYSTEM_PROMPT = load_prompt("news_filter")
+_SYSTEM_PROMPT_TEMPLATE = load_prompt("news_filter")
 
 
 def load_recent_headlines(days: int = 3) -> list[dict]:
@@ -69,9 +69,18 @@ def run() -> dict:
         log(AGENT, "No archived headlines found — skipping filter")
         return {}
 
-    # Cap input to 60 headlines to keep Haiku context small
-    headlines = headlines[:60]
+    # Cap input to 80 headlines (raised from 60 — more sources now)
+    headlines = headlines[:80]
     log(AGENT, f"Processing {len(headlines)} deduplicated headlines")
+
+    # Inject current holdings from snapshot (fall back to empty string)
+    snapshot_path = DATA / "context" / "portfolio_snapshot.json"
+    try:
+        snapshot = json.loads(snapshot_path.read_text()) if snapshot_path.exists() else {}
+        holdings_list = ", ".join(snapshot.get("holdings", {}).keys()) or "no holdings on file"
+    except Exception:
+        holdings_list = "no holdings on file"
+    system_prompt = _SYSTEM_PROMPT_TEMPLATE.replace("{holdings_list}", holdings_list)
 
     # Build a compact input list (title + source only — no full summary)
     today_str = datetime.date.today().isoformat()
@@ -82,7 +91,7 @@ def run() -> dict:
     context = f"Today: {today_str}\n\nHeadlines:\n{json.dumps(compact, indent=2)}"
 
     try:
-        raw = run_claude(SYSTEM_PROMPT, context, MAX_TURNS, model=HAIKU_MODEL)
+        raw = run_claude(system_prompt, context, MAX_TURNS, model=HAIKU_MODEL)
         digest = extract_json(raw)
         digest["_generated_at"] = datetime.datetime.now().isoformat()
         write_json(DIGEST_PATH, digest)

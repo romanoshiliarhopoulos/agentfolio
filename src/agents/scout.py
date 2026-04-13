@@ -16,14 +16,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from agents.base import (
-    DATA, load_json, load_text, run_claude, write_text,
+    DATA, load_investor_profile, load_json, load_text, run_claude, write_text,
     scout_logs_this_week, current_week, log, load_prompt,
 )
 
 AGENT = "scout"
 MAX_TURNS = 15
 
-SYSTEM_PROMPT = load_prompt("scout")
+_SYSTEM_PROMPT_TEMPLATE = load_prompt("scout")
 
 
 def build_context(snapshot: dict, research: dict, prior_logs: list[Path]) -> str:
@@ -32,6 +32,9 @@ def build_context(snapshot: dict, research: dict, prior_logs: list[Path]) -> str
     # Today's date
     today = datetime.date.today().isoformat()
     parts.append(f"# Daily Scout Context — {today}\n")
+
+    investor_profile = load_investor_profile()
+    parts.append(f"# Investor profile: \n{investor_profile}")
 
     # Portfolio snapshot (key fields only — keep tokens lean)
     nav = snapshot.get("nav", {})
@@ -69,8 +72,26 @@ def build_context(snapshot: dict, research: dict, prior_logs: list[Path]) -> str
     parts.append(f"- 10y yield: {m.get('t10y')}%  |  2y yield: {m.get('t2y')}%  "
                  f"|  Spread: {m.get('yield_curve_spread')}%")
     parts.append(f"- Fed Funds: {m.get('fed_funds')}%  |  CPI YoY: {m.get('cpi_yoy')}%  "
-                 f"|  Unemployment: {m.get('unemployment')}%")
+                 f"|  Core CPI YoY: {m.get('core_cpi')}%  |  PCE YoY: {m.get('pce_yoy')}%")
+    parts.append(f"- Unemployment: {m.get('unemployment')}%  "
+                 f"|  Retail Sales MoM: {m.get('retail_sales_mom')}%  "
+                 f"|  Industrial Prod: {m.get('industrial_prod')}")
+    cli = m.get("leading_indicator")
+    cli_regime = m.get("leading_indicator_regime", "")
+    parts.append(f"- OECD Leading Indicator: {cli} ({cli_regime})  "
+                 f"|  Consumer Sent: {m.get('consumer_sent')}")
     parts.append(f"- HY Credit Spread: {m.get('hy_spread')}%")
+
+    # Fear & Greed
+    fg = snapshot.get("fear_greed", {})
+    if fg and not fg.get("error"):
+        score = fg.get("score")
+        label = fg.get("label", "")
+        s1w   = fg.get("score_1w_ago")
+        l1w   = fg.get("label_1w_ago", "")
+        score_str = f"{score:.0f}" if score is not None else "n/a"
+        s1w_str   = f"{s1w:.0f} ({l1w})" if s1w is not None else "n/a"
+        parts.append(f"- Fear & Greed: {score_str} — {label}  (1w ago: {s1w_str})")
 
     # Sector performance
     parts.append("\n## Sector ETF Performance (1d)")
@@ -135,11 +156,15 @@ def run() -> None:
             log(AGENT, "ERROR: portfolio_snapshot.json still not found after running precompute.py.")
             sys.exit(1)
 
+    # Inject current holdings into system prompt dynamically
+    holdings_list = ", ".join(snapshot.get("holdings", {}).keys()) or "no holdings found"
+    system_prompt = _SYSTEM_PROMPT_TEMPLATE.replace("{holdings_list}", holdings_list)
+
     prior_logs = scout_logs_this_week()
     context = build_context(snapshot, research, prior_logs)
 
-    log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get("AGENTFOLIO_MAX_TURNS", MAX_TURNS))})...")
-    output = run_claude(SYSTEM_PROMPT, context, MAX_TURNS)
+    log(AGENT, f"Built context ({len(context)} chars). Calling claude (max_turns={int(os.environ.get('AGENTFOLIO_MAX_TURNS', MAX_TURNS))})...")
+    output = run_claude(system_prompt, context, MAX_TURNS)
 
     # Determine output path
     today = datetime.date.today()
