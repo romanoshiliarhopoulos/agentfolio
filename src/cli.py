@@ -7,7 +7,7 @@ Usage:
 Commands:
     status          Live dashboard: schedule, last runs, portfolio state
     config          View and edit configuration
-    schedule        Manage launchd schedules
+    schedule        Manage agent schedules (start/stop daemon, configure agents)
     run             Run any agent on demand with custom settings
     prompts         View and edit agent prompts
     logs            View and tail run logs
@@ -19,6 +19,8 @@ import sys
 import json
 import subprocess
 import datetime
+import signal
+import time
 import importlib
 from pathlib import Path
 
@@ -60,8 +62,8 @@ AGENTS = {
     "agent2": {"label": "Risk Assessor",      "script": SRC / "agents/agent2.py",      "turns": 40,  "schedule": "Sun 07:15 (Week A)"},
     "agent3": {"label": "Market Researcher",  "script": SRC / "agents/agent3.py",      "turns": 35,  "schedule": "Sun 12:00 (Week A)"},
     "agent4": {"label": "Strategy Advisor",   "script": SRC / "agents/agent4.py",      "turns": 43,  "schedule": "Sun 17:00 (Week A)"},
-    "agent5": {"label": "Report Generator",   "script": SRC / "agents/agent5.py",      "turns": 28,  "schedule": "Sun 22:00 (Week A)"},
-    "pulse":  {"label": "Pulse Check",        "script": SRC / "agents/agent_pulse.py", "turns": 40,  "schedule": "Sun 02:00 (Week B)"},
+    "agent5": {"label": "Report Generator",   "script": SRC / "agents/agent5.py",      "turns": 15,  "schedule": "Sun 22:00 (Week A)"},
+    "pulse":  {"label": "Pulse Check",        "script": SRC / "agents/agent_pulse.py", "turns": 40,  "schedule": "Wed 06:00 (weekly)"},
 }
 
 PLIST_LABELS = {
@@ -118,6 +120,92 @@ def _write_dotenv(env: dict[str, str]) -> None:
         if key not in written:
             lines.append(f"{key}={val}")
     DOTENV.write_text("\n".join(lines) + "\n")
+
+
+# ── Schedule helpers ──────────────────────────────────────────────────────────
+
+SCHEDULES_FILE = DATA / "schedules.json"
+PIDFILE = DATA / "scheduler.pid"
+
+def _load_schedules() -> dict:
+    """Load schedules from data/schedules.json."""
+    if SCHEDULES_FILE.exists():
+        try:
+            return json.loads(SCHEDULES_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+def _save_schedules(schedules: dict) -> None:
+    """Save schedules to data/schedules.json."""
+    SCHEDULES_FILE.write_text(json.dumps(schedules, indent=2))
+
+def _scheduler_pid() -> int | None:
+    """Read PID from scheduler.pid file."""
+    if PIDFILE.exists():
+        try:
+            return int(PIDFILE.read_text().strip())
+        except Exception:
+            return None
+    return None
+
+def _scheduler_running() -> bool:
+    """Check if scheduler daemon is running."""
+    pid = _scheduler_pid()
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)  # Signal 0 doesn't kill, just checks if process exists
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        return False
+
+def _start_scheduler() -> None:
+    """Start the scheduler daemon in the background."""
+    if _scheduler_running():
+        console.print("[yellow]Scheduler already running[/]")
+        return
+
+    # Start in background, detached
+    try:
+        subprocess.Popen(
+            [sys.executable, str(SRC / "scheduler.py")],
+            cwd=str(REPO),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # Detach from terminal
+        )
+        time.sleep(1)  # Give it a moment to start
+        if _scheduler_running():
+            pid = _scheduler_pid()
+            console.print(f"[green]✓[/] Scheduler started (PID {pid})")
+        else:
+            console.print("[red]✗[/] Scheduler failed to start")
+    except Exception as e:
+        console.print(f"[red]✗[/] Failed to start scheduler: {e}")
+
+def _stop_scheduler() -> None:
+    """Stop the scheduler daemon."""
+    pid = _scheduler_pid()
+    if pid is None:
+        console.print("[yellow]Scheduler not running[/]")
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+        time.sleep(1)
+        if _scheduler_running():
+            console.print("[yellow]Scheduler still running, force killing...[/]")
+            os.kill(pid, signal.SIGKILL)
+            time.sleep(0.5)
+        console.print("[green]✓[/] Scheduler stopped")
+        PIDFILE.unlink(missing_ok=True)
+    except ProcessLookupError:
+        console.print("[yellow]Scheduler not running[/]")
+        PIDFILE.unlink(missing_ok=True)
+    except Exception as e:
+        console.print(f"[red]✗[/] Failed to stop scheduler: {e}")
 
 
 def _is_plist_loaded(label: str) -> bool:
@@ -250,18 +338,20 @@ def _build_menu_sections():
                lambda k=k: _invoke(["prompts", "edit", k]))
               for k in AGENTS],
         ]),
-        ("h", "Schedule", "Manage launchd jobs", [
-            ("Show schedule", "All jobs with loaded/unloaded status",
+        ("h", "Schedule", "Manage agent schedules", [
+            ("Show schedule", "All agents & daemon status",
              lambda: _invoke(["schedule", "list"])),
-            ("Install plists", "Copy plists to ~/Library/LaunchAgents",
-             lambda: _invoke(["schedule", "install"])),
-            ("Enable all", "Load all jobs into launchd",
-             lambda: _invoke(["schedule", "enable", "all"])),
-            ("Disable all", "Unload all jobs from launchd",
-             lambda: _invoke(["schedule", "disable", "all"])),
-            ("Enable one job", "Load a specific job",
+            ("Start daemon", "Start the scheduler service",
+             lambda: _invoke(["schedule", "start"])),
+            ("Stop daemon", "Stop the scheduler service",
+             lambda: _invoke(["schedule", "stop"])),
+            ("Daemon status", "Check if scheduler is running",
+             lambda: _invoke(["schedule", "status"])),
+            ("Configure agent", "Set schedule for one agent",
+             lambda: _schedule_set_prompt()),
+            ("Enable agent", "Enable scheduling for an agent",
              lambda: _schedule_toggle_prompt("enable")),
-            ("Disable one job", "Unload a specific job",
+            ("Disable agent", "Disable scheduling for an agent",
              lambda: _schedule_toggle_prompt("disable")),
         ]),
         ("l", "Logs", "View run logs", [
@@ -347,6 +437,12 @@ def _schedule_toggle_prompt(action: str) -> None:
     choices = list(AGENTS.keys())
     agent = Prompt.ask("Agent", choices=choices, default="scout")
     _invoke(["schedule", action, agent])
+
+
+def _schedule_set_prompt() -> None:
+    choices = list(AGENTS.keys())
+    agent = Prompt.ask("Agent", choices=choices, default="scout")
+    _invoke(["schedule", "set", agent])
 
 
 # ── Menu rendering ────────────────────────────────────────────────────────────
@@ -714,98 +810,205 @@ def config_wizard():
 
 @cli.group()
 def schedule():
-    """Manage launchd job schedules."""
+    """Manage job schedules using persistent JSON config."""
     pass
 
 
 @schedule.command("list")
 def schedule_list():
-    """Show all jobs and their launchd status."""
+    """Show all agents with their current schedules."""
+    console.print()
+
+    schedules = _load_schedules()
+    running = _scheduler_running()
+    daemon_status = "[green]● running[/]" if running else "[dim]○ stopped[/]"
+
+    # Header
+    console.print(f"Daemon status: {daemon_status}")
+    if running:
+        pid = _scheduler_pid()
+        console.print(f"PID: {pid}")
     console.print()
 
     table = Table(
-        title="[bold]Launchd Schedule[/]",
+        title="[bold]Agent Schedules[/]",
         box=box.ROUNDED,
         header_style="bold cyan",
         border_style="dim",
         expand=True,
     )
     table.add_column("Agent")
-    table.add_column("Plist label", style="dim")
-    table.add_column("Plist installed", justify="center")
-    table.add_column("launchd loaded", justify="center")
-    table.add_column("Schedule")
+    table.add_column("Enabled", justify="center")
+    table.add_column("Weekdays")
+    table.add_column("Time")
+    table.add_column("Week")
+    table.add_column("Last run")
 
     for key, info in AGENTS.items():
-        label    = PLIST_LABELS[key]
-        plist_src = LAUNCHD / f"{label}.plist"
-        installed = (LAUNCH_AGENTS_DIR / f"{label}.plist").exists()
-        loaded    = _is_plist_loaded(label)
+        config = schedules.get(key, {})
+        enabled = config.get("enabled", True)
+        weekdays = config.get("weekdays", [])
+        hour = config.get("hour", 0)
+        minute = config.get("minute", 0)
+        parity = config.get("week_parity", "every")
+        last_run = config.get("last_run")
 
-        inst_icon   = "[green]✓[/]" if installed else "[red]✗[/]"
-        loaded_icon = "[green]● loaded[/]" if loaded else "[dim]○ unloaded[/]"
+        enabled_icon = "[green]✓[/]" if enabled else "[dim]✗[/]"
+        weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        wd_str = ",".join(weekday_names[w] for w in sorted(weekdays)) if weekdays else "—"
+        time_str = f"{hour:02d}:{minute:02d}"
+        parity_str = parity if parity != "every" else "every"
+        last_str = last_run.split("T")[0] if last_run else "—"
 
         table.add_row(
             info["label"],
-            label,
-            inst_icon,
-            loaded_icon,
-            info["schedule"],
+            enabled_icon,
+            wd_str,
+            time_str,
+            parity_str,
+            last_str,
         )
 
     console.print(table)
     console.print()
 
 
-@schedule.command("install")
-def schedule_install():
-    """Copy all plists to ~/Library/LaunchAgents (does not load them)."""
-    LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-    for key in AGENTS:
-        label = PLIST_LABELS[key]
-        src   = LAUNCHD / f"{label}.plist"
-        dst   = LAUNCH_AGENTS_DIR / f"{label}.plist"
-        if not src.exists():
-            console.print(f"[yellow]⚠[/]  Plist not found: {src.name}")
-            continue
-        import shutil
-        shutil.copy2(src, dst)
-        console.print(f"[green]✓[/] Installed {label}")
+@schedule.command("set")
+@click.argument("agent", type=click.Choice(list(AGENTS.keys())))
+def schedule_set(agent):
+    """Set schedule for an agent (interactive)."""
+    schedules = _load_schedules()
+    config = schedules.get(agent, {})
+
     console.print()
-    console.print("[dim]Run [bold]schedule enable <agent>[/] to activate.[/]")
+    console.print(f"[bold]Configuring schedule for {AGENTS[agent]['label']}[/]")
+    console.print()
+
+    # Weekdays
+    current_wd = config.get("weekdays", [])
+    wd_str = Prompt.ask(
+        "Weekdays (comma-separated, 0=Mon...6=Sun)",
+        default=",".join(map(str, current_wd)) if current_wd else "0,1,2,3,4,5,6",
+    )
+    try:
+        weekdays = [int(x.strip()) for x in wd_str.split(",") if x.strip()]
+        if not all(0 <= w <= 6 for w in weekdays):
+            raise ValueError
+    except (ValueError, IndexError):
+        console.print("[red]Invalid weekdays[/]")
+        return
+
+    # Hour
+    current_h = config.get("hour", 6)
+    hour = Prompt.ask("Hour (0-23)", default=str(current_h))
+    try:
+        hour = int(hour)
+        if not 0 <= hour <= 23:
+            raise ValueError
+    except ValueError:
+        console.print("[red]Invalid hour[/]")
+        return
+
+    # Minute
+    current_m = config.get("minute", 0)
+    minute = Prompt.ask("Minute (0-59)", default=str(current_m))
+    try:
+        minute = int(minute)
+        if not 0 <= minute <= 59:
+            raise ValueError
+    except ValueError:
+        console.print("[red]Invalid minute[/]")
+        return
+
+    # Week parity
+    current_parity = config.get("week_parity", "every")
+    parity = Prompt.ask(
+        "Week type (every/even/odd)",
+        default=current_parity,
+        choices=["every", "even", "odd"],
+    )
+
+    # Enabled
+    enabled = Confirm.ask("Enable this schedule?", default=config.get("enabled", True))
+
+    # Save
+    schedules[agent] = {
+        "enabled": enabled,
+        "weekdays": sorted(weekdays),
+        "hour": hour,
+        "minute": minute,
+        "week_parity": parity if parity != "every" else None,
+        "last_run": config.get("last_run"),
+    }
+    _save_schedules(schedules)
+
+    console.print(f"[green]✓[/] Schedule updated for {agent}")
+    console.print()
+    if _scheduler_running():
+        console.print("[dim]Scheduler is running — changes will take effect on next daemon restart.[/]")
+    else:
+        console.print("[dim]Run [bold]schedule start[/] to begin scheduling.[/]")
 
 
 @schedule.command("enable")
 @click.argument("agent", type=click.Choice(list(AGENTS.keys()) + ["all"]))
 def schedule_enable(agent):
-    """Load a job into launchd (starts scheduling it)."""
+    """Enable scheduling for an agent."""
+    schedules = _load_schedules()
     keys = list(AGENTS.keys()) if agent == "all" else [agent]
+
     for key in keys:
-        label = PLIST_LABELS[key]
-        plist = LAUNCH_AGENTS_DIR / f"{label}.plist"
-        if not plist.exists():
-            console.print(f"[red]✗[/] Not installed: {label}  (run schedule install first)")
-            continue
-        r = subprocess.run(["launchctl", "load", str(plist)], capture_output=True)
-        if r.returncode == 0:
-            console.print(f"[green]✓[/] Loaded {label}")
-        else:
-            console.print(f"[red]✗[/] Failed: {r.stderr.decode().strip()}")
+        if key in schedules:
+            schedules[key]["enabled"] = True
+            console.print(f"[green]✓[/] Enabled {AGENTS[key]['label']}")
+
+    _save_schedules(schedules)
 
 
 @schedule.command("disable")
 @click.argument("agent", type=click.Choice(list(AGENTS.keys()) + ["all"]))
 def schedule_disable(agent):
-    """Unload a job from launchd (stops scheduling it)."""
+    """Disable scheduling for an agent."""
+    schedules = _load_schedules()
     keys = list(AGENTS.keys()) if agent == "all" else [agent]
+
     for key in keys:
-        label = PLIST_LABELS[key]
-        plist = LAUNCH_AGENTS_DIR / f"{label}.plist"
-        r = subprocess.run(["launchctl", "unload", str(plist)], capture_output=True)
-        if r.returncode == 0:
-            console.print(f"[green]✓[/] Unloaded {label}")
-        else:
-            console.print(f"[red]✗[/] {r.stderr.decode().strip() or 'already unloaded'}")
+        if key in schedules:
+            schedules[key]["enabled"] = False
+            console.print(f"[green]✓[/] Disabled {AGENTS[key]['label']}")
+
+    _save_schedules(schedules)
+
+
+@schedule.command("start")
+def schedule_start():
+    """Start the scheduler daemon."""
+    if _scheduler_running():
+        console.print("[yellow]Scheduler is already running[/]")
+        return
+    _start_scheduler()
+
+
+@schedule.command("stop")
+def schedule_stop():
+    """Stop the scheduler daemon."""
+    if not _scheduler_running():
+        console.print("[yellow]Scheduler is not running[/]")
+        return
+    _stop_scheduler()
+
+
+@schedule.command("status")
+def schedule_status():
+    """Show scheduler status."""
+    console.print()
+    if _scheduler_running():
+        pid = _scheduler_pid()
+        console.print(f"[green]✓[/] Scheduler is running (PID {pid})")
+    else:
+        console.print("[yellow]Scheduler is not running[/]")
+    console.print()
+    _invoke(["schedule", "list"])
 
 
 # ── run ───────────────────────────────────────────────────────────────────────
